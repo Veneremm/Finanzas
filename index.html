@@ -1033,6 +1033,8 @@
   .cuo.cur { border-color: var(--navy); } :root[data-theme="dark"] .cuo.cur { border-color: var(--ink); }
   .cuota.on { background: var(--brand); } :root[data-theme="dark"] .cuota.on { background: var(--brand2); }
   .loans .msi { margin: 0; }
+  .loan-freq-ro { margin-top: 14px; font-size: 14px; color: var(--ink2); } .loan-freq-ro b { color: var(--ink); }
+  .loan-hint { display: block; margin-top: 6px; font-size: 12.5px; font-weight: 600; color: var(--brand); }
 </style>
 </head>
 <body>
@@ -2314,7 +2316,7 @@ function CommitmentsScreen({ commits, cards, expenses, msis, payments, incomes, 
   }
   const events = [];
   activeCommits.forEach(c=>events.push({ day:Math.min(dim,parseInt(c.day)||1), kind:'commit', sign:-1, emoji:(c.cat||'📦 Otro').split(' ')[0], label:c.desc,
-    sub:c.isLoan?(c.lender||'Préstamo'):((c.cat||'').split(' ').slice(1).join(' ')||'Pago fijo'), amount:parseFloat(c.amount)||0, done:(c.paidMonths||[]).includes(selMonth), ref:c }));
+    sub:c.isLoan?((c.lender||'Préstamo')+(c.freq==='week'?' · semanal':c.freq==='biweek'?' · quincenal':'')):((c.cat||'').split(' ').slice(1).join(' ')||'Pago fijo'), amount:parseFloat(c.amount)||0, done:(c.paidMonths||[]).includes(selMonth), ref:c }));
   (cards||[]).forEach(cd=>{ const a=cardAmountForMonth(cd); if (a>0) events.push({ day:Math.min(dim,parseInt(cd.payDay)||1), kind:'card', sign:-1, emoji:'💳', color:(COLORS.find(x=>x.id===cd.color)||COLORS[2]).hex,
     label:`Pago ${cd.name||'tarjeta'}`, sub:'Pago de tarjeta', amount:a, done:false, ref:cd }); });
   activeIncomes.forEach(c=>events.push({ day:Math.min(dim,parseInt(c.day)||1), kind:'income', sign:1, emoji:'💰', label:c.desc,
@@ -2659,47 +2661,81 @@ function InsightsScreen({ expenses, cards, cats, budgets, setBudgets, onEditExpe
 // ─── PRÉSTAMOS ───────────────────────────────────────────────────────────────
 // Un préstamo se guarda con la forma de un pago fijo (desc, amount, day, month, year, repeat, paidMonths)
 // para que aparezca solo en el calendario y en "Próximos pagos".
-const loanInfo = l => {
-  const rep = parseInt(l.repeat)||0, paid = l.paidMonths||[], left = Math.max(0, rep - paid.length), m = parseFloat(l.amount)||0;
-  const total = Math.max(left, parseInt(l.total)||rep);
-  let nextKey = null, next = null;
-  for (let i=0;i<rep;i++) {
-    const d = new Date(parseInt(l.year), parseInt(l.month)+i, 1), k = monthKey(d.getFullYear(), d.getMonth());
-    if (!paid.includes(k)) { nextKey = k; const dim = new Date(d.getFullYear(), d.getMonth()+1, 0).getDate(); next = new Date(d.getFullYear(), d.getMonth(), Math.min(dim, parseInt(l.day)||1)); break; }
+const LOAN_FREQ = { month:'Mensual', biweek:'Quincenal', week:'Semanal' };
+const LOAN_PER = { month:'al mes', biweek:'cada quincena', week:'cada semana' };
+// Fecha del pago número j (0 = el siguiente por pagar; negativos = ya hechos antes)
+function loanNth(l, j) {
+  const y=parseInt(l.year), m=parseInt(l.month), d=parseInt(l.day)||1, fr=l.freq||'month';
+  if (fr==='week') return new Date(y, m, d+7*j);
+  if (fr==='biweek') {
+    const a = Math.min(15, d>15 ? d-15 : d), slot = (d>15?1:0)+j, mo = Math.floor(slot/2), half = ((slot%2)+2)%2;
+    const dim = new Date(y, m+mo+1, 0).getDate();
+    return new Date(y, m+mo, half ? Math.min(dim, a+15) : a);
   }
-  return { left, owed:left*m, total, done:total-left, monthly:m, next, nextKey, pct: total>0 ? (total-left)/total*100 : 0 };
+  const dim = new Date(y, m+j+1, 0).getDate();
+  return new Date(y, m+j, Math.min(dim, d));
+}
+const loanKey = (l, date) => (l.freq||'month')==='month' ? monthKey(date.getFullYear(), date.getMonth()) : isoLocal(date);
+function loanOcc(l) {
+  const rep = Math.max(0, parseInt(l.repeat)||0), T = Math.max(rep, parseInt(l.total)||rep), P0 = T-rep, paid = l.paidMonths||[];
+  return Array.from({length:T}, (_,i)=>{ const date = loanNth(l, i-P0), key = loanKey(l, date), locked = i<P0; return { num:i+1, date, key, locked, paid: locked || paid.includes(key) }; });
+}
+const loanInfo = l => {
+  const occ = loanOcc(l), m = parseFloat(l.amount)||0, T = occ.length;
+  const left = occ.filter(o=>!o.paid).length, nx = occ.find(o=>!o.paid);
+  const per = {month:1, biweek:2, week:52/12}[l.freq||'month'];
+  return { left, owed:left*m, total:T, done:T-left, monthly:m, monthlyEq:m*per, next:nx?nx.date:null, nextKey:nx?nx.key:null, pct: T>0 ? (T-left)/T*100 : 0, occ };
 };
+// Cada pago pendiente/hecho se ve como un "pago fijo" de su mes para el calendario y los totales
+const loanCommits = l => loanOcc(l).filter(o=>!o.locked).map(o=>({
+  id:l.id+'~'+o.key, loanId:l.id, desc:l.desc, lender:l.lender, freq:l.freq||'month', amount:l.amount, cat:'🏦 Préstamo', isLoan:true,
+  day:o.date.getDate(), month:o.date.getMonth(), year:o.date.getFullYear(), repeat:1,
+  paidMonths:o.paid?[monthKey(o.date.getFullYear(), o.date.getMonth())]:[] }));
 
 function LoanForm({ initial, onSave, onDelete, onClose }) {
   const i0 = initial ? loanInfo(initial) : null;
-  const nm = new Date(currentYear, currentMonth+1, today.getDate());   // por defecto: el mismo día del mes que sigue
+  const nm = new Date(currentYear, currentMonth+1, today.getDate());
+  const tm = new Date(currentYear, currentMonth, today.getDate()+1);
+  const toF = d => ({ day:d.getDate(), month:d.getMonth(), year:d.getFullYear() });
   const [f, setF] = useState(initial
-    ? { ...initial, amount: initial.amount||'', total: String(i0.total), done: String(i0.done) }
-    : { desc:'', lender:'', amount:'', total:'', done:'', day:nm.getDate(), month:nm.getMonth(), year:nm.getFullYear(), paidMonths:[] });
+    ? { ...initial, freq: initial.freq||'month', amount: initial.amount||'', total: String(i0.total), done: String(i0.done) }
+    : { desc:'', lender:'', freq:'month', amount:'', total:'', done:'0', ...toF(nm), paidMonths:[] });
   const [more, setMore] = useState(false);
   const set = k => e => setF(p=>({...p,[k]:e.target.value}));
-  const isEditing = !!initial;
+  const isEditing = !!initial, fr = f.freq||'month';
   const mo = parseFloat(f.amount)||0, T = parseInt(f.total)||0, D = Math.min(parseInt(f.done)||0, Math.max(0,T-1));
   const left = Math.max(0, T-D);
   const dateVal = `${f.year}-${String((parseInt(f.month)||0)+1).padStart(2,'0')}-${String(parseInt(f.day)||1).padStart(2,'0')}`;
   const setDate = e => { if(!e.target.value) return; const [Y,M,D2]=e.target.value.split('-').map(Number); setF(p=>({...p, year:Y, month:M-1, day:D2})); };
+  const pickFreq = k => setF(p=>({ ...p, freq:k, ...(k==='month'?toF(nm):toF(tm)) }));
   const ready = f.desc.trim() && mo>0 && T>0;
+  const noun = {month:'pagos',biweek:'quincenas',week:'semanas'}[fr];
+  const lastD = ready ? loanNth({ freq:fr, year:f.year, month:f.month, day:f.day }, left-1) : null;
+  const WDN = ['domingo','lunes','martes','miércoles','jueves','viernes','sábado'];
+  const sd = new Date(parseInt(f.year), parseInt(f.month), parseInt(f.day)||1);
+  const hint = fr==='week' ? `Pagas cada ${WDN[sd.getDay()]}` : fr==='biweek' ? `Pagas los días ${Math.min(15, sd.getDate()>15?sd.getDate()-15:sd.getDate())} y ${Math.min(15, sd.getDate()>15?sd.getDate()-15:sd.getDate())+15} de cada mes` : '';
   return (
     <Sheet title={isEditing?'Editar préstamo':'Nuevo préstamo'} onClose={onClose}>
       <div className="sheet-body">
         <input className="xp-name" value={f.desc} onChange={set('desc')} placeholder="¿Qué préstamo es? ej. Coche" autoFocus={!isEditing}/>
-        <div className="xp-label" style={{marginTop:16}}>Pago mensual</div>
+        {isEditing
+          ? <div className="loan-freq-ro">Se paga de forma <b>{LOAN_FREQ[fr].toLowerCase()}</b></div>
+          : <div className="seg three" style={{marginTop:16}}>{Object.entries(LOAN_FREQ).map(([k,l])=>(<button type="button" key={k} className={fr===k?'on':''} onClick={()=>pickFreq(k)}>{l}</button>))}</div>}
+        <div className="xp-label" style={{marginTop:16}}>Pago {{month:'mensual',biweek:'quincenal',week:'semanal'}[fr]}</div>
         <AmountBox value={f.amount} onChange={set('amount')}/>
         <div className="field-row">
-          <div className="field"><label>Pagos en total</label><input type="number" inputMode="numeric" min="1" value={f.total} onFocus={e=>e.target.select()} onChange={set('total')} placeholder="ej. 24"/></div>
-          <div className="field"><label>Pagos que ya hice</label><input type="number" inputMode="numeric" min="0" value={f.done==="0"&&!isEditing?'':f.done} onFocus={e=>e.target.select()} onChange={set('done')} placeholder="0"/></div>
+          <div className="field"><label>Pagos en total</label><input type="number" inputMode="numeric" min="1" value={f.total} onChange={set('total')} placeholder="ej. 24"/></div>
+          <div className="field"><label>Pagos que ya hice</label><input type="number" inputMode="numeric" min="0" value={f.done} onChange={set('done')} placeholder="0"/></div>
         </div>
-        {ready && <div className="loan-sum">Te faltan <b className="num">{fmt(mo*left)}</b> en {left} {left===1?'pago':'pagos'} · total {fmt(mo*T)}.</div>}
-        <button type="button" className="more-toggle" style={{marginTop:12}} onClick={()=>setMore(m=>!m)}>{more?'Menos opciones':'Más opciones (fecha, banco)'}</button>
+        {!isEditing && fr!=='month' && (
+          <div className="field"><label>Fecha del próximo pago</label><input type="date" value={dateVal} onChange={setDate}/>{hint && <small className="loan-hint">{hint}</small>}</div>
+        )}
+        {ready && <div className="loan-sum">Te faltan <b className="num">{fmt(mo*left)}</b> en {left} {left===1?noun.replace(/s$/,''):noun} · total {fmt(mo*T)}.{lastD && <> Terminas el <b>{lastD.toLocaleDateString('es-MX',{day:'numeric',month:'short',year:'numeric'})}</b>.</>}</div>}
+        <button type="button" className="more-toggle" style={{marginTop:12}} onClick={()=>setMore(m=>!m)}>{more?'Menos opciones':(fr==='month'?'Más opciones (fecha, banco)':'Más opciones (banco)')}</button>
         {more && (<>
-          {isEditing
+          {fr==='month' && (isEditing
             ? <div className="field"><label>Día del mes que pagas</label><input type="number" inputMode="numeric" min="1" max="31" value={f.day} onChange={set('day')}/></div>
-            : <div className="field"><label>Fecha del próximo pago</label><input type="date" value={dateVal} onChange={setDate}/></div>}
+            : <div className="field"><label>Fecha del próximo pago</label><input type="date" value={dateVal} onChange={setDate}/></div>)}
           <div className="field"><label>Banco o a quién le debes</label><input value={f.lender||''} onChange={set('lender')} placeholder="ej. BBVA, Mamá, Coppel…"/></div>
         </>)}
       </div>
@@ -2710,7 +2746,7 @@ function LoanForm({ initial, onSave, onDelete, onClose }) {
           if(!ready) return;
           const marked = isEditing ? (f.paidMonths||[]).length : 0;
           const before = Math.max(0, D - marked);
-          const out = { ...f, cat:'🏦 Préstamo', isLoan:true, amount:mo, total:T, repeat:Math.max(1,T-before), day:Math.min(31,Math.max(1,parseInt(f.day)||1)) };
+          const out = { ...f, freq:fr, cat:'🏦 Préstamo', isLoan:true, amount:mo, total:T, repeat:Math.max(1,T-before), day:Math.min(31,Math.max(1,parseInt(f.day)||1)) };
           delete out.done; onSave(out); onClose();
         }}>Guardar</button>
       </div>
@@ -2719,35 +2755,34 @@ function LoanForm({ initial, onSave, onDelete, onClose }) {
 }
 
 function LoansScreen({ loans, onAdd, onEdit, onToggle }) {
-  const curKey = monthKey(currentYear, currentMonth);
-  const open = loans.map(l=>loanInfo(l)).filter(i=>i.left>0);
-  const owed = open.reduce((a,i)=>a+i.owed,0), monthly = open.reduce((a,i)=>a+i.monthly,0);
+  const infos = loans.map(l=>loanInfo(l));
+  const open = infos.filter(i=>i.left>0);
+  const owed = open.reduce((a,i)=>a+i.owed,0), monthly = open.reduce((a,i)=>a+i.monthlyEq,0);
+  const todayKey = isoLocal(today);
   return (
     <div className="loans">
       {loans.length>0 && (
         <section className="ins-hero">
           <div className="k">Te falta pagar en préstamos</div>
           <div className="v num">{fmt(owed)}</div>
-          <div className="ins-delta">{fmt(monthly)} al mes · {open.length} {open.length===1?'activo':'activos'}</div>
+          <div className="ins-delta">≈ {fmt(monthly)} al mes · {open.length} {open.length===1?'activo':'activos'}</div>
         </section>
       )}
       <button className="add-row" style={{margin:0}} onClick={onAdd}><IconPlus/>Agregar préstamo</button>
-      {!loans.length && <div className="empty"><div className="icon">🏦</div><b>Sin préstamos</b>Tus préstamos aparecerán aquí con cada pago por mes.</div>}
-      {loans.map(l=>{
-        const info = loanInfo(l), T = info.total, monthly = info.monthly, rep = parseInt(l.repeat)||0, P0 = Math.max(0, T-rep);
+      {!loans.length && <div className="empty"><div className="icon">🏦</div><b>Sin préstamos</b>Tus préstamos aparecerán aquí con cada pago.</div>}
+      {loans.map((l,idx)=>{
+        const info = infos[idx], T = info.total, monthly = info.monthly, fr = l.freq||'month';
         const paidN = info.done, remaining = info.left;
-        const chips = Array.from({length:T},(_,i)=>{
-          const d = new Date(parseInt(l.year), parseInt(l.month)+(i-P0), 1), key = monthKey(d.getFullYear(), d.getMonth());
-          return { num:i+1, key, label:MONTHS[d.getMonth()], yr:d.getFullYear(), locked:i<P0, paid: i<P0 || (l.paidMonths||[]).includes(key) };
-        });
-        const end = chips[chips.length-1];
+        const nextOcc = info.occ.find(o=>!o.paid);
+        const end = info.occ[info.occ.length-1].date;
+        const endTxt = `${MONTHS[end.getMonth()]} ${end.getFullYear()}`;
         return (
           <div key={l.id} className="msi">
             <div className="msi-top">
               <Ring pct={T?paidN/T:0} size={64} stroke={8} color="var(--brand)"><span style={{fontSize:14}}>{paidN}/{T}</span></Ring>
               <div className="msi-info">
                 <div className="msi-t">{l.desc}</div>
-                <div className="msi-s">{l.lender?`${l.lender} · `:''}{fmt(monthly)} al mes · termina {end.label} {end.yr}</div>
+                <div className="msi-s">{l.lender?`${l.lender} · `:''}{fmt(monthly)} {LOAN_PER[fr]} · termina {endTxt}</div>
               </div>
               <button className="pill-btn" onClick={()=>onEdit(l)}>{remaining===0?'✓ Liquidado':'Editar'}</button>
             </div>
@@ -2757,13 +2792,17 @@ function LoansScreen({ loans, onAdd, onEdit, onToggle }) {
               <div><b>{fmt(T*monthly)}</b><span>Total</span></div>
             </div>
             <div className="cuo-grid">
-              {chips.map(c=>(
-                <button key={c.num} className={`cuo ${c.paid?'on':''} ${c.key===curKey?'cur':''}`} style={c.locked?{cursor:'default'}:undefined}
-                  onClick={c.locked?undefined:()=>onToggle(l.id,c.key)}
-                  aria-label={`Pago ${c.num} ${c.label} ${c.yr}`} title={c.locked?`Pago ${c.num} · ya hecho`:c.paid?'Toca para desmarcar':'Toca para marcar pagado'}>
-                  <small>{c.num}</small>{c.label}{c.yr!==currentYear?<small>{String(c.yr).slice(2)}</small>:null}
-                </button>
-              ))}
+              {info.occ.map(c=>{
+                const d = c.date, cur = !c.locked && (fr==='month' ? c.key===monthKey(currentYear,currentMonth) : (nextOcc && c.num===nextOcc.num));
+                const lbl = fr==='month' ? MONTHS[d.getMonth()] : `${d.getDate()} ${MONTHS[d.getMonth()]}`;
+                return (
+                  <button key={c.num} className={`cuo ${c.paid?'on':''} ${cur?'cur':''}`} style={c.locked?{cursor:'default'}:undefined}
+                    onClick={c.locked?undefined:()=>onToggle(l.id,c.key)}
+                    aria-label={`Pago ${c.num} ${lbl} ${d.getFullYear()}`} title={c.locked?`Pago ${c.num} · ya hecho`:c.paid?'Toca para desmarcar':'Toca para marcar pagado'}>
+                    <small>{c.num}</small>{lbl}{d.getFullYear()!==currentYear?<small>{String(d.getFullYear()).slice(2)}</small>:null}
+                  </button>
+                );
+              })}
             </div>
           </div>
         );
@@ -3010,7 +3049,7 @@ function App() {
   const [loans, setLoans] = useStorage('fp_loans', []);
   const [loanModal, setLoanModal] = useState(null);
   const [cardsView, setCardsView] = useState('cards');
-  const allCommits = useMemo(()=>[...commits, ...loans], [commits, loans]);
+  const allCommits = useMemo(()=>[...commits, ...loans.flatMap(loanCommits)], [commits, loans]);
   const [incomes, setIncomes]   = useStorage('fp_incomes', []);
   const [cash, setCash]         = useStorage('fp_cash', '');
   const [income, setIncome]     = useStorage('fp_income', '');
@@ -3194,6 +3233,7 @@ function App() {
     // Pagos fijos (apartado Pagos) activos este mes y no pagados
     const curMK = monthKey(currentYear, currentMonth);
     allCommits.forEach(c=>{
+      if (c.isLoan) return;
       const sm = monthKey(parseInt(c.year), parseInt(c.month));
       const mths = parseInt(c.repeat)||1;
       const end = new Date(parseInt(c.year), parseInt(c.month)+mths-1, 1);
@@ -3209,9 +3249,17 @@ function App() {
           emoji:(c.cat||'📦 Otro').split(' ')[0], isCommit:true, date, days:daysUntil(dd) });
       }
     });
+    // Préstamos: su siguiente pago por hacer (semanal, quincenal o mensual)
+    const t0 = new Date(currentYear, currentMonth, today.getDate());
+    loans.forEach(l=>{
+      const i = loanInfo(l);
+      if (!i.next || i.monthly<=0) return;
+      const diff = Math.round((i.next - t0)/86400000);
+      if (diff <= 15) list.push({ id:'loan-'+l.id, name:l.desc||'Préstamo', amount:i.monthly, emoji:'🏦', isCommit:true, date:i.next, days:Math.max(0,diff) });
+    });
     list.sort((a,b)=>a.days-b.days);
     return list;
-  }, [cards, expenses, msis, payments, allCommits]);
+  }, [cards, expenses, msis, payments, allCommits, loans]);
 
   // Alertas: pagos que vencen en ≤3 días
   const dueSoonCount = upcomingPayments.filter(p=>p.days<=3).length;
@@ -3373,7 +3421,7 @@ function App() {
             <>
               <div className="page-head cal-wrap"><div><h1>Pagos</h1></div><button className="round-btn" onClick={()=>setAddChooser(true)} aria-label="Agregar"><IconPlus/></button></div>
               <CommitmentsScreen onOpenCard={c=>setDetail(c)} onNotify={notify} cash={cash} onEditCash={()=>setCashModal(true)} commits={allCommits} cards={cards} expenses={expenses} msis={msis} payments={payments} incomes={incomes}
-                onEdit={c=>c.isLoan?setLoanModal(c):setCommitModal(c)} onEditIncome={i=>setIncomeEvtModal(i)} onTogglePaid={(id,mk)=>loans.some(l=>l.id===id)?toggleLoanPaid(id,mk):toggleCommitPaid(id,mk)} onToggleReceived={toggleIncomeReceived}
+                onEdit={c=>c.isLoan?setLoanModal(loans.find(l=>l.id===c.loanId)||null):setCommitModal(c)} onEditIncome={i=>setIncomeEvtModal(i)} onTogglePaid={(id,mk)=>String(id).includes('~')?toggleLoanPaid(String(id).split('~')[0],String(id).split('~')[1]):toggleCommitPaid(id,mk)} onToggleReceived={toggleIncomeReceived}
                 selMonth={selMonth} setSelMonth={setSelMonth}/>
             </>
           )}
