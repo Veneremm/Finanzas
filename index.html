@@ -153,7 +153,11 @@
   .route-paid { margin-top: 10px; display: inline-flex; align-items: center; gap: 8px; font-size: 13.5px; color: rgba(255,255,255,.8); }
   .route-paid i { display: block; width: 86px; height: 6px; border-radius: 3px; background: rgba(255,255,255,.2); overflow: hidden; }
   .route-paid i b { display: block; height: 100%; border-radius: 3px; background: var(--marigold); transition: width .8s var(--ease-out); }
-  .route-chart { margin: 14px -6px 0; }
+  .route-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-top: 18px; padding-top: 14px; border-top: 1px solid rgba(255,255,255,.16); }
+  .route-head b { font-family: var(--font-num); font-size: 15px; font-weight: 800; letter-spacing: -.02em; }
+  .route-head span { font-size: 11.5px; color: rgba(255,255,255,.6); font-weight: 600; }
+  .route-card .route-head { border-top: none; margin-top: 0; padding-top: 0; } .route-card .route-head span { color: var(--ink3); }
+  .route-chart { margin: 6px -6px 0; }
   .route-chart svg { display: block; width: 100%; height: auto; overflow: visible; }
   .route-cap { margin: 2px 4px 0; min-height: 22px; font-size: 14.5px; color: rgba(255,255,255,.78); }
   .route-cap b { color: #fff; font-weight: 700; }
@@ -1006,7 +1010,8 @@
   .loan.fin { opacity: .6; }
   .loan-sum { margin-top: 6px; padding: 12px 14px; border-radius: 14px; background: color-mix(in srgb, var(--sun) 22%, transparent); font-size: 13.5px; font-weight: 600; }
   .fl-lbl { display: block; font-size: 13px; font-weight: 650; color: var(--ink2); margin: 4px 0 -6px; }
-  .route-loans { margin-top: 8px; font-size: 13px; font-weight: 650; opacity: .85; }
+  .route-loans { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 6px; font-size: 12.5px; font-weight: 650; }
+  .route-loans > span { padding: 5px 11px; border-radius: 20px; background: rgba(255,255,255,.14); }
   .route-loans b { font-weight: 800; }
   .seg-wrap { padding: 0 16px 14px; } .app-root.as-pc .seg-wrap { padding: 0 0 14px; max-width: 760px; margin: 0 auto; }
 </style>
@@ -1203,7 +1208,7 @@ function RouteChart({ sched, total, tone }) {
   const pts = [total];
   let acc = total;
   for (let j=0;j<n;j++){ acc = Math.max(0, acc - sched[j]); pts.push(j===last?0:acc); }
-  const W=340, H=132, px=8, top=12, bot=24;
+  const W=340, H=150, px=10, top=30, bot=24;
   const X = j => px + j/n*(W-2*px);
   const Y = v => top + (1-v/total)*(H-top-bot);
   let d = `M${X(0)},${Y(pts[0])}`;
@@ -1220,6 +1225,7 @@ function RouteChart({ sched, total, tone }) {
   };
   return (
     <>
+      <div className="route-head"><b>Ruta a cero</b><span>Toca la gráfica para ver cada mes</span></div>
       <div className={`route-chart ${still?'rt-static':''}`}>
         <svg viewBox={`0 0 ${W} ${H}`} style={{touchAction:'pan-y'}} onPointerDown={move} onPointerMove={move} onPointerLeave={()=>setHi(null)} onPointerUp={()=>setHi(null)} role="img" aria-label="Proyección de tu deuda mes a mes">
           <defs>
@@ -1229,20 +1235,25 @@ function RouteChart({ sched, total, tone }) {
             </linearGradient>
           </defs>
           <line x1={px} x2={W-px} y1={H-bot} y2={H-bot} stroke={hero?'rgba(255,255,255,.25)':'var(--line2)'} strokeWidth="1" strokeDasharray="2 4"/>
+          <line x1={px} x2={W-px} y1={Y(total/2)} y2={Y(total/2)} stroke={hero?'rgba(255,255,255,.14)':'var(--line)'} strokeWidth="1"/>
           <path className="rt-area" d={area} fill={`url(#${gid})`}/>
           <path className="rt-line" pathLength="1" d={d} fill="none" stroke={line} strokeWidth="3.4" strokeLinecap="round"/>
+          {n<=18 && pts.slice(1,n).map((v,j)=>(<circle key={j} cx={X(j+1)} cy={Y(v)} r="2.6" fill={hero?'#fff':'var(--brand)'} opacity=".75"/>))}
           <circle cx={X(0)} cy={Y(pts[0])} r="4.5" fill={hero?'#fff':'var(--brand)'}/>
           <circle cx={X(n)} cy={Y(0)} r="6" fill={line} stroke={hero?'#1f2ee0':'var(--surface)'} strokeWidth="3"/>
           {hi!==null && <g>
             <line x1={X(hi)} x2={X(hi)} y1={top-4} y2={H-bot} stroke={hero?'rgba(255,255,255,.55)':'var(--line2)'} strokeWidth="1.5"/>
             <circle cx={X(hi)} cy={Y(pts[hi])} r="6" fill={hero?'#fff':'var(--brand)'} stroke={line} strokeWidth="3"/>
           </g>}
+          <text x={X(0)} y={Y(pts[0])-10} fontSize="11.5" fontWeight="700" fill={hero?'#fff':'var(--ink)'} textAnchor="start">{fmt(total)}</text>
+          <text x={X(n)} y={Y(0)-13} fontSize="11.5" fontWeight="700" fill={hero?'#ffb703':'var(--ok)'} textAnchor="end">$0.00</text>
+          {n>=4 && <text x={X(Math.round(n/2))} y={H-6} fontSize="11" fontWeight="600" fill={lblc} textAnchor="middle">{lab(Math.round(n/2))}</text>}
           <text x={X(0)} y={H-6} fontSize="11.5" fontWeight="600" fill={lblc} textAnchor="start">Hoy</text>
           <text x={X(n)} y={H-6} fontSize="11.5" fontWeight="600" fill={lblc} textAnchor="end">{lab(n)}</text>
         </svg>
       </div>
       <div className="route-cap">
-        {hi===null ? <>Sin deuda en <b>{lab(n)}</b></>
+        {hi===null ? <>Terminas de pagar en <b>{lab(n)}</b> · {n} {n===1?'mes':'meses'}</>
           : hi===0 ? <>Hoy · debes <b>{fmt0(total)}</b></>
           : <>{lab(hi)} · quedan <b>{fmt0(pts[hi])}</b></>}
       </div>
@@ -1690,7 +1701,7 @@ function HomeSummary({ grandTotal, thisMonth, weekly, months, upcoming, cash, ex
         <div className="route-lead">Debes hoy</div>
         <div className="route-amt num">${whole.toLocaleString('es-MX')}<small>.{dec}</small></div>
         {everything>0 && <div className="route-paid"><i><b style={{width:`${paidPct}%`}}/></i>Pagado {fmt0(paidTotal)} · {paidPct}%</div>}
-        {loanOwed>0 && <div className="route-loans">+ Préstamos <b className="num">{fmt(loanOwed)}</b> · Total <b className="num">{fmt(owedTotal+loanOwed)}</b></div>}
+        {loanOwed>0 && <div className="route-loans"><span>Tarjetas <b className="num">{fmt(owedTotal)}</b></span><span>Préstamos <b className="num">{fmt(loanOwed)}</b></span><span>Total <b className="num">{fmt(owedTotal+loanOwed)}</b></span></div>}
         {owedTotal>0.005
           ? <RouteChart sched={sched} total={owedTotal}/>
           : <div className="route-cap" style={{marginTop:14}}>Sin deuda pendiente</div>}
@@ -2040,7 +2051,7 @@ function CardDetail({ card, expenses, msis, payments, onBack, onEditCard, onPayC
             </div>
           );
           return totalToPay>0.005
-            ? <div className="route-card"><div className="h3">Ruta a cero</div><RouteChart sched={sched} total={totalToPay} tone="card"/>{trio(true)}</div>
+            ? <div className="route-card"><RouteChart sched={sched} total={totalToPay} tone="card"/>{trio(true)}</div>
             : trio(false);
         })()}
 
